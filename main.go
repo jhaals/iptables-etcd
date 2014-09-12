@@ -50,9 +50,11 @@ func writeRules(rules []Rules, file string) error {
 		return err
 	}
 	defer f.Close()
+	f.Write([]byte("*filter\n"))
 	for _, rule := range rules {
 		f.Write([]byte(rule.Value + "\n"))
 	}
+	f.Write([]byte("COMMIT\n"))
 	return nil
 }
 
