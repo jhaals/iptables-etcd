@@ -1,27 +1,30 @@
 package main
 
 import (
-	"crypto/md5"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 )
 
-type Rules struct {
+type Rule struct {
 	Key   string
 	Value string
 }
+type Iptables struct {
+	Rules    []Rule `json:"nodes"`
+	Modified int    `json:"ModifiedIndex"`
+	Created  int    `json:"CreatedIndex"`
+}
 type Response struct {
-	Node struct {
-		Nodes []Rules
-	}
+	Iptables Iptables `json:"node"`
 }
 
-func getRules() ([]Rules, error) {
+func getRules() (Iptables, error) {
 	url := "http://172.17.42.1:4001/v2/keys/iptables?sorted=true"
 	resp, err := http.Get(url)
 	if err != nil {
@@ -29,15 +32,15 @@ func getRules() ([]Rules, error) {
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
+	var response Response
 	if err != nil {
-		return nil, err
+		return response.Iptables, err
 	}
-	var rules Response
-	json.Unmarshal(body, &rules)
-	return rules.Node.Nodes, nil
+	json.Unmarshal(body, &response)
+	return response.Iptables, nil
 }
 
-func writeRules(rules []Rules, file string) error {
+func writeRules(rules []Rule, file string) error {
 	f, err := os.Create(file)
 	if err != nil {
 		return err
@@ -51,45 +54,53 @@ func writeRules(rules []Rules, file string) error {
 	return nil
 }
 
-func Checksum(file string) (string, error) {
+func IptablesUpToDate(file string, index string) bool {
 	data, err := ioutil.ReadFile(file)
 	if err != nil {
-		return "", err
+		return false
 	}
-	return fmt.Sprintf("%x", md5.Sum(data)), nil
+	if string(data) == index {
+		return true
+	}
+	return false
 }
 
 func main() {
-	tempFile := "/iptables.rules"
-	destinationFile := "/dst/iptables.rules"
+	dst := os.Getenv("DST")
+	if dst == "" {
+		log.Println("Destination path 'DST' must be set")
+		os.Exit(1)
+	}
+	rulesFile := filepath.Join(dst, "iptables.rules")
+	indexFile := filepath.Join(dst, "iptables.index")
+	log.Println("Starting... Will check for updates in etcd with a 5 second interval")
 	for {
-		rules, err := getRules()
+		time.Sleep(time.Second * 5)
+		r, err := getRules()
 		if err != nil {
-			// No rules no run
-			log.Fatal(err)
+			// No response from etcd
+			log.Println(err)
+			continue
 		}
+		modified := strconv.Itoa(r.Modified)
+		if IptablesUpToDate(indexFile, modified) {
+			continue
+		}
+
 		// We shouldn't write less than 3 rules.
-		if len(rules) < 3 {
-			log.Fatal("Dude! There's not enough rules in your iptables...")
+		if len(r.Rules) < 3 {
+			log.Println("Dude! There's not enough rules in your iptables...")
+			continue
 		}
 
 		// Write rules from etcd to file
-		err = writeRules(rules, tempFile)
+		err = writeRules(r.Rules, rulesFile)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			continue
 		}
-
-		tempFileChecksum, _ := Checksum(tempFile)
-		destinationFileChecksum, _ := Checksum(destinationFile)
-		//Checksum tempfile with existing file. Only overwrite if necessary
-		if tempFileChecksum != destinationFileChecksum {
-			err = writeRules(rules, destinationFile)
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Println("Rules updated")
-			os.Exit(0)
-		}
-		time.Sleep(time.Second * 30)
+		ioutil.WriteFile(indexFile, []byte(modified), 0644)
+		log.Println(rulesFile, "updated")
+		return
 	}
 }
