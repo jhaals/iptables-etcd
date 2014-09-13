@@ -89,7 +89,7 @@ func main() {
 
 		// We shouldn't write less than 3 rules.
 		if len(r.Rules) < 3 {
-			log.Println("Dude! There's not enough rules in your iptables...")
+			log.Println("Dude! There's not enough rules in etcd...")
 			continue
 		}
 
