@@ -1,12 +1,14 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 type Rules struct {
@@ -20,12 +22,6 @@ type Response struct {
 }
 
 func getRules() ([]Rules, error) {
-	etcdHost := os.Getenv("ETCD_HOST")
-	if etcdHost == "" {
-		log.Fatal("Environment variable ETCD_HOST must be set.")
-	}
-
-	resp, err := http.Get(etcdHost + "/v2/keys/iptables?sorted=true")
 	url := "http://172.17.42.1:4001/v2/keys/iptables?sorted=true"
 	resp, err := http.Get(url)
 	if err != nil {
@@ -42,11 +38,6 @@ func getRules() ([]Rules, error) {
 }
 
 func writeRules(rules []Rules, file string) error {
-	// We shouldn't write less than 3 rules.
-	if len(rules) < 3 {
-		return errors.New("Dude! There's not enough rules in your iptables...")
-	}
-
 	f, err := os.Create(file)
 	if err != nil {
 		return err
@@ -60,16 +51,45 @@ func writeRules(rules []Rules, file string) error {
 	return nil
 }
 
-func main() {
-
-	rules, err := getRules()
+func Checksum(file string) (string, error) {
+	data, err := ioutil.ReadFile(file)
 	if err != nil {
-		// No rules no run
-		log.Fatal(err)
+		return "", err
 	}
+	return fmt.Sprintf("%x", md5.Sum(data)), nil
+}
 
-	err = writeRules(rules, "/dst/iptables-rules.txt")
-	if err != nil {
-		log.Fatal(err)
+func main() {
+	tempFile := "/iptables.rules"
+	destinationFile := "/dst/iptables.rules"
+	for {
+		rules, err := getRules()
+		if err != nil {
+			// No rules no run
+			log.Fatal(err)
+		}
+		// We shouldn't write less than 3 rules.
+		if len(rules) < 3 {
+			log.Fatal("Dude! There's not enough rules in your iptables...")
+		}
+
+		// Write rules from etcd to file
+		err = writeRules(rules, tempFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		tempFileChecksum, _ := Checksum(tempFile)
+		destinationFileChecksum, _ := Checksum(destinationFile)
+		//Checksum tempfile with existing file. Only overwrite if necessary
+		if tempFileChecksum != destinationFileChecksum {
+			err = writeRules(rules, destinationFile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Println("Rules updated")
+			os.Exit(0)
+		}
+		time.Sleep(time.Second * 30)
 	}
 }
