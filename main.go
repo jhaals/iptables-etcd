@@ -26,6 +26,8 @@ func getRules() ([]Rules, error) {
 	}
 
 	resp, err := http.Get(etcdHost + "/v2/keys/iptables?sorted=true")
+	url := "http://172.17.42.1:4001/v2/keys/iptables?sorted=true"
+	resp, err := http.Get(url)
 	if err != nil {
 		log.Println(err)
 	}
