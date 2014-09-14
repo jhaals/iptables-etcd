@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"time"
 )
 
@@ -24,8 +25,7 @@ type Response struct {
 	Iptables Iptables `json:"node"`
 }
 
-func getRules() (Iptables, error) {
-	url := "http://172.17.42.1:4001/v2/keys/iptables?sorted=true"
+func getRules(url string) (Iptables, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Println(err)
@@ -54,36 +54,33 @@ func writeRules(rules []Rule, file string) error {
 	return nil
 }
 
-func IptablesUpToDate(file string, index string) bool {
-	data, err := ioutil.ReadFile(file)
-	if err != nil {
-		return false
-	}
-	if string(data) == index {
-		return true
-	}
-	return false
-}
-
 func main() {
+	host := "172.17.42.1:4001"
 	dst := os.Getenv("DST")
 	if dst == "" {
 		log.Println("Destination path 'DST' must be set")
 		os.Exit(1)
 	}
+	id := os.Getenv("ID")
+	if dst == "" {
+		log.Println("ID must be set")
+		os.Exit(1)
+	}
 	rulesFile := filepath.Join(dst, "iptables.rules")
-	indexFile := filepath.Join(dst, "iptables.index")
-	log.Println("Starting... Will check for updates in etcd with a 5 second interval")
+	log.Println("Starting... Going to watch etcd for changes")
 	for {
+		// Wait 5 sec just in case something goes bananas.
 		time.Sleep(time.Second * 5)
-		r, err := getRules()
+		url := func() string {
+			if _, err := os.Stat(rulesFile); err != nil {
+				return "http://" + etcd + "/v2/keys/iptables?sorted=true"
+			}
+			return "http://" + etcd + "/v2/keys/iptables?sorted=true&wait=true"
+		}
+		r, err := getRules(url())
 		if err != nil {
 			// No response from etcd
 			log.Println(err)
-			continue
-		}
-		modified := strconv.Itoa(r.Modified)
-		if IptablesUpToDate(indexFile, modified) {
 			continue
 		}
 
@@ -99,8 +96,9 @@ func main() {
 			log.Println(err)
 			continue
 		}
-		ioutil.WriteFile(indexFile, []byte(modified), 0644)
 		log.Println(rulesFile, "updated")
-		return
+		// Fix this..
+		exec.Command(fmt.Sprintf("curl -L -XPUT http://%s/v2/keys/iptables-reload/%s -d value=reload", etcd, id)).Output()
+		continue
 	}
 }

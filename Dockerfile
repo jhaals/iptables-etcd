@@ -3,7 +3,7 @@ FROM ubuntu
 MAINTAINER Johan Haals <johan.haals@gmail.com>
 
 RUN apt-get update
-RUN apt-get install -y golang
+RUN apt-get install -y golang curl
 
 ADD . /source
 
